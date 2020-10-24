@@ -182,8 +182,7 @@ def dequeue_follow():
 if __name__=="__main__":
     role = sys.argv[1]
     logging.basicConfig(level=logging.INFO,
-                    filename='log/{}/{}.log'.format(role, datetime.datetime.now()\
-                        .strftime('%Y%m%d%H%M%S')),
+                    filename='log/{0}/{0}.log'.format(role),
                     filemode='a',
                     format=
                     '%(asctime)s - %(pathname)s[line:%(lineno)d] - %(levelname)s: %(message)s'
