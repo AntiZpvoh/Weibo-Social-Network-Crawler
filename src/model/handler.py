@@ -3,12 +3,16 @@ from model import session, User, UserRelationship, \
     InfoQueue, FollowQueue, init_db, drop_db, restart_session, \
         FOLLOWER, FOLLOWEE
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.sql import func
 import re
 import time
 import datetime
 import sys
 import logging
 from bs4 import BeautifulSoup
+
+INFO_QUEUE_CAPACITY = 100000
+FOLLOW_QUEUE_CAPACITY = 100000
 
 info_url_pattern = "https://weibo.cn/{}/info"
 profile_url_pattern = "https://weibo.cn/{}/profile"
@@ -30,19 +34,35 @@ def fetch_info(user_url):
     uid = None
     response = requests.request("GET", user_url, headers=headers)
     soup = BeautifulSoup(response.text, features="lxml")
-    info_str = soup.select("div[class='u'] table td span[class='ctt']")[0].get_text()
-    uid = avatar_re_pattern.findall(soup.select("div[class='u'] table td a")[0]['href'])[0]
-    name, location = profile_re_pattern.findall(info_str)[0]
-    logging.info("uid: {}, name: {}, location: {}".format(uid, name, location))
     try:
-        user = User(uid, name, location)
-        ele = FollowQueue(uid)
-        session.add(user)
-        session.add(ele)
-        session.commit()
-    except IntegrityError:
-        session.rollback()
-        logging.info("repeat primary key")
+        info_str = soup.select("div[class='u'] table td span[class='ctt']")[0].get_text()
+        uid = avatar_re_pattern.findall(soup.select("div[class='u'] table td a")[0]['href'])[0]
+        name, location = profile_re_pattern.findall(info_str)[0]
+        logging.info("uid: {}, name: {}, location: {}".format(uid, name, location))
+        try:
+            user = User(uid, name, location)
+            queue_follow(uid)
+            # ele = FollowQueue(uid)
+            session.add(user)
+            # session.add(ele)
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            logging.info("repeat primary key")
+    except IndexError:
+        logging.error("Index out of range")
+        t = 0
+        with open('log/info_consumer/index_error_times.log', 'r') as f:
+            t = int(f.read())+1
+            if t>4:
+                first_info_obj = session.query(InfoQueue).order_by(InfoQueue.create_time).first()
+                session.delete(first_info_obj)
+                session.commit()
+                logging.info('remove first obj in info queue since there is some problems')
+        with open('log/info_consumer/index_error_times.log', 'w') as f:
+            f.write(str(t))
+        exit(-1)
+
     return uid
 
 def fetch_profile(user_url):
@@ -90,10 +110,7 @@ def fetch_followers(uid):
                 # uid_arr = chat_re_pattern.findall(fan_info['href'])
                 user_url = fan_info['href']
                 try:
-                    # r = UserRelationship(uid, follower_uid)
-                    ele = InfoQueue(user_url, FOLLOWER, uid)
-                    # session.add(r)
-                    session.add(ele)
+                    queue_info(user_url, FOLLOWER, uid)
                     logging.info("user {}, follower of {}, has been fetched".format(user_url, uid))
                     session.commit()
                 except IntegrityError:
@@ -114,15 +131,10 @@ def fetch_followees(uid):
             soup = BeautifulSoup(response.text, features="lxml")
             followees_list = soup.select("table tr td[style='width: 52px'] a")
             for followee_info in followees_list:
-                # uid_arr = chat_re_pattern.findall(followee_info['href'])
                 user_url = followee_info['href']
                 try:
-                    # r = UserRelationship(followee_uid, uid)
-                    ele = InfoQueue(user_url, FOLLOWEE, uid)
-                    # session.add(r)
-                    session.add(ele)
+                    queue_info(user_url, FOLLOWEE, uid)
                     logging.info("user {}, followee of {}, has been fetched".format(user_url, uid))
-                    session.commit()
                 except IntegrityError:
                     session.rollback()
                     logging.info("repeat primary key {}".format(user_url))
@@ -131,8 +143,15 @@ def fetch_followees(uid):
     except IndexError:
         logging.info("Index out of range")
 
-def queue_info(uid):
-    ele = InfoQueue(uid)
+def queue_info(user_url, follow_or_fan, uid):
+    count_info_queue = session.query(func.count('*')).select_from(InfoQueue).scalar()
+    logging.info(count_info_queue)
+    while count_info_queue > INFO_QUEUE_CAPACITY:
+        logging.warning('info queue is full. waiting for being consumed...')
+        count_info_queue = session.query(func.count('*')).select_from(InfoQueue).scalar()
+        logging.info(count_info_queue)
+        time.sleep(10)
+    ele = InfoQueue(user_url, follow_or_fan, uid)
     session.add(ele)
     session.commit()
 
@@ -159,7 +178,17 @@ def dequeue_info():
             logging.info("dequeue relationship between {} and {}".format(relation.source_uid, uid))
         session.commit()
 
+        with open('log/info_consumer/index_error_times.log', 'w') as f:
+            f.write('0')
+
 def queue_follow(uid):
+    count_follow_queue = session.query(func.count('*')).select_from(FollowQueue).scalar()
+    logging.info(count_follow_queue)
+    while count_follow_queue > FOLLOW_QUEUE_CAPACITY:
+        logging.warning('follow queue is full. waiting for being consumed...')
+        count_follow_queue = session.query(func.count('*')).select_from(FollowQueue).scalar()
+        logging.info(count_follow_queue)
+        time.sleep(2)
     ele = FollowQueue(uid)
     session.add(ele)
     session.commit()
