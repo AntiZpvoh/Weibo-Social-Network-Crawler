@@ -11,8 +11,8 @@ import sys
 import logging
 from bs4 import BeautifulSoup
 
-INFO_QUEUE_CAPACITY = 100000
-FOLLOW_QUEUE_CAPACITY = 100000
+INFO_QUEUE_CAPACITY = 200000
+FOLLOW_QUEUE_CAPACITY = 200000
 
 info_url_pattern = "https://weibo.cn/{}/info"
 profile_url_pattern = "https://weibo.cn/{}/profile"
@@ -149,6 +149,7 @@ def queue_info(user_url, follow_or_fan, uid):
     while count_info_queue > INFO_QUEUE_CAPACITY:
         logging.warning('info queue is full. waiting for being consumed...')
         count_info_queue = session.query(func.count('*')).select_from(InfoQueue).scalar()
+        session.commit()
         logging.info(count_info_queue)
         time.sleep(10)
     ele = InfoQueue(user_url, follow_or_fan, uid)
@@ -187,6 +188,7 @@ def queue_follow(uid):
     while count_follow_queue > FOLLOW_QUEUE_CAPACITY:
         logging.warning('follow queue is full. waiting for being consumed...')
         count_follow_queue = session.query(func.count('*')).select_from(FollowQueue).scalar()
+        session.commit()
         logging.info(count_follow_queue)
         time.sleep(2)
     ele = FollowQueue(uid)
