@@ -145,7 +145,8 @@ def fetch_followees(uid):
 
 def queue_info(user_url, follow_or_fan, uid):
     count_info_queue = session.query(func.count('*')).select_from(InfoQueue).scalar()
-    logging.info(count_info_queue)
+    logging.info('limit speed, info queue: {}'.format(count_info_queue))
+    time.sleep(2)
     while count_info_queue > INFO_QUEUE_CAPACITY:
         logging.warning('info queue is full. waiting for being consumed...')
         count_info_queue = session.query(func.count('*')).select_from(InfoQueue).scalar()
@@ -174,10 +175,17 @@ def dequeue_info():
             elif relation.follow_or_fan == FOLLOWER:
                 relation_obj = UserRelationship(relation.source_uid, uid)
                 logging.info("build relationship between {} and {}".format(relation.source_uid, uid))
-            session.add(relation_obj)
-            session.delete(relation)
-            logging.info("dequeue relationship between {} and {}".format(relation.source_uid, uid))
-        session.commit()
+            try:
+                session.add(relation_obj)
+                session.delete(relation)
+                logging.info("dequeue relationship between {} and {}".format(relation.source_uid, uid))
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+                logging.info("repeat primary key")
+                session.delete(relation)
+                logging.info("re-dequeue relationship between {} and {}".format(relation.source_uid, uid))
+                session.commit()
 
         with open('log/info_consumer/index_error_times.log', 'w') as f:
             f.write('0')
